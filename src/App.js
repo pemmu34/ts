@@ -5,6 +5,8 @@ import Login from './Login';
 import MainPage from './MainPage';
 import Profile from './Profile';
 import LettersPage from './LettersPage';
+import RoomsPage from './RoomsPage';
+import RoomDetailsPage from './RoomDetailsPage';
 
 const API_BASE = 'http://localhost:5000';
 
@@ -13,7 +15,9 @@ function App() {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [currentUser, setCurrentUser] = useState(null);
     const [showSuccessNotification, setShowSuccessNotification] = useState(false);
-    const [currentPage, setCurrentPage] = useState('main'); // 'main', 'profile', 'letters'
+    const [currentPage, setCurrentPage] = useState('main');
+    const [currentRoom, setCurrentRoom] = useState(null);
+    const [pageProps, setPageProps] = useState({}); // Добавлено: определение pageProps
 
     // Функция для авторизации пользователя
     const handleLogin = async (username, password) => {
@@ -52,16 +56,27 @@ function App() {
         setCurrentUser(null);
         setShowSuccessNotification(false);
         setCurrentPage('main');
+        setCurrentRoom(null);
+        setPageProps({}); // Очищаем pageProps при выходе
     };
 
     // Функция навигации
-    const handleNavigate = (page) => {
+    const handleNavigate = (page, roomId = null) => {
         setCurrentPage(page);
+        if (roomId) {
+            setCurrentRoom(roomId);
+            setPageProps({ roomId }); // Сохраняем roomId в pageProps
+        } else {
+            setCurrentRoom(null);
+            setPageProps({}); // Очищаем pageProps
+        }
     };
 
     // Функция возврата на главную
     const handleBackToMain = () => {
         setCurrentPage('main');
+        setCurrentRoom(null);
+        setPageProps({}); // Очищаем pageProps
     };
 
     // Автоматически скрываем уведомление через 3 секунды
@@ -101,6 +116,23 @@ function App() {
                         currentUser={currentUser}
                         onNavigate={handleNavigate}
                         onBack={handleBackToMain}
+                    />
+                );
+            case 'rooms':
+                return (
+                    <RoomsPage
+                        currentUser={currentUser}
+                        onNavigate={handleNavigate}
+                        onBack={handleBackToMain}
+                    />
+                );
+            case 'room-details':
+                return (
+                    <RoomDetailsPage
+                        currentUser={currentUser}
+                        roomId={currentRoom || pageProps.roomId} // Используем currentRoom или pageProps.roomId
+                        onNavigate={handleNavigate} // Используем handleNavigate вместо navigateTo
+                        onBack={() => handleNavigate('rooms')} // Используем handleNavigate вместо navigateTo
                     />
                 );
             case 'main':

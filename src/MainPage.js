@@ -117,7 +117,7 @@ function MainPage({ currentUser, onLogout, onNavigate }) {
 
     const handleRoomsClick = () => {
         console.log('Переход на страницу комнат');
-        // onNavigate('rooms') - будет реализовано позже
+        onNavigate('rooms');
     };
 
     const handleProfileClick = () => {
