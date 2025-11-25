@@ -19,6 +19,9 @@ const pool = new Pool({
     port: 5432,
 });
 
+// Хранилище для SSE соединений
+const roomConnections = new Map();
+
 // Проверка подключения к БД
 pool.on('connect', () => {
     console.log('✅ Подключение к базе данных установлено');
@@ -33,9 +36,9 @@ const checkTableExists = async (tableName) => {
     try {
         const result = await pool.query(`
             SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name = $1
+                SELECT FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = $1
             )
         `, [tableName]);
         return result.rows[0].exists;
@@ -44,6 +47,111 @@ const checkTableExists = async (tableName) => {
         return false;
     }
 };
+
+// SSE эндпоинт для событий комнаты
+app.get('/api/rooms/:room_id/events', (req, res) => {
+    const roomId = req.params.room_id;
+    const userId = req.query.user_id;
+
+    console.log(`🔔 SSE: Пользователь ${userId} подключился к комнате ${roomId}`);
+
+    // Устанавливаем заголовки для SSE
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+    });
+
+    // Создаем уникальный ID для соединения
+    const clientId = `${userId}_${Date.now()}`;
+
+    // Добавляем соединение в хранилище
+    if (!roomConnections.has(roomId)) {
+        roomConnections.set(roomId, new Map());
+    }
+    roomConnections.get(roomId).set(clientId, res);
+
+    // Отправляем приветственное сообщение
+    const data = JSON.stringify({
+        type: 'connected',
+        message: 'Connected to room events',
+        timestamp: new Date().toISOString()
+    });
+    res.write(`data: ${data}\n\n`);
+
+    // Обработчик закрытия соединения
+    req.on('close', () => {
+        console.log(`🔔 SSE: Пользователь ${userId} отключился от комнаты ${roomId}`);
+        if (roomConnections.has(roomId)) {
+            roomConnections.get(roomId).delete(clientId);
+            if (roomConnections.get(roomId).size === 0) {
+                roomConnections.delete(roomId);
+            }
+        }
+    });
+});
+
+// Функция для отправки событий всем клиентам в комнате
+function broadcastToRoom(roomId, event) {
+    if (roomConnections.has(roomId)) {
+        const clients = roomConnections.get(roomId);
+        const data = `data: ${JSON.stringify(event)}\n\n`;
+
+        clients.forEach((res, clientId) => {
+            try {
+                res.write(data);
+            } catch (error) {
+                console.error(`❌ Ошибка отправки события клиенту ${clientId}:`, error);
+                clients.delete(clientId);
+            }
+        });
+
+        console.log(`🔔 SSE: Событие ${event.type} отправлено ${clients.size} клиентам в комнате ${roomId}`);
+    }
+}
+
+// Вспомогательная функция для получения комнаты с участниками
+async function getRoomWithParticipants(roomId) {
+    const roomResult = await pool.query(`
+        SELECT r.id_room, r.name_room, r.pass_room, r.created_by,
+               u.username as creator_name
+        FROM rooms r
+        JOIN users u ON r.created_by = u.id
+        WHERE r.id_room = $1
+    `, [roomId]);
+
+    if (roomResult.rows.length === 0) {
+        return null;
+    }
+
+    const participantsResult = await pool.query(`
+        SELECT 
+            u.id, 
+            u.username,
+            rp.is_ready,
+            rp.selected_letter_id,
+            l.heading as selected_letter_heading,
+            (u.id = $2) as is_current_user,
+            CASE 
+                WHEN u.id = $2 THEN ' (Вы)'
+                WHEN u.id = $3 THEN ' (создатель)'
+                ELSE ''
+            END as user_role
+        FROM room_participants rp
+        JOIN users u ON rp.user_id = u.id
+        LEFT JOIN letters l ON rp.selected_letter_id = l.id_letter
+        WHERE rp.room_id = $1
+        ORDER BY 
+            CASE WHEN u.id = $3 THEN 0 ELSE 1 END,
+            rp.joined_at
+    `, [roomId, roomResult.rows[0].created_by, roomResult.rows[0].created_by]);
+
+    return {
+        room: roomResult.rows[0],
+        participants: participantsResult.rows
+    };
+}
 
 // Тестовый маршрут
 app.get('/', (req, res) => {
@@ -177,13 +285,12 @@ app.post('/api/letters', async (req, res) => {
     } catch (err) {
         console.error('💥 Ошибка при создании письма:', err);
 
-        // Проверяем конкретные ошибки
-        if (err.code === '23505') { // unique violation
+        if (err.code === '23505') {
             res.status(400).json({
                 success: false,
                 message: 'Письмо с таким заголовком уже существует'
             });
-        } else if (err.code === '23503') { // foreign key violation
+        } else if (err.code === '23503') {
             res.status(400).json({
                 success: false,
                 message: 'Пользователь не существует'
@@ -239,54 +346,6 @@ app.put('/api/letters/:letter_id', async (req, res) => {
     }
 });
 
-// Сохранение выбранного письма пользователем
-app.post('/api/rooms/:room_id/select-letter', async (req, res) => {
-    const roomId = req.params.room_id;
-    const { user_id, letter_id } = req.body;
-    console.log('📝 Получен запрос на выбор письма:', { roomId, user_id, letter_id });
-
-    if (!user_id || !letter_id) {
-        return res.status(400).json({
-            success: false,
-            message: 'ID пользователя и письма обязательны'
-        });
-    }
-
-    try {
-        // Проверяем, что пользователь является участником комнаты
-        const participantCheck = await pool.query(
-            'SELECT * FROM room_participants WHERE room_id = $1 AND user_id = $2',
-            [roomId, user_id]
-        );
-
-        if (participantCheck.rows.length === 0) {
-            return res.status(403).json({
-                success: false,
-                message: 'Пользователь не является участником комнаты'
-            });
-        }
-
-        // Сохраняем выбранное письмо
-        const result = await pool.query(
-            'UPDATE room_participants SET selected_letter_id = $1 WHERE room_id = $2 AND user_id = $3 RETURNING *',
-            [letter_id, roomId, user_id]
-        );
-
-        console.log(`✅ Пользователь ${user_id} выбрал письмо ${letter_id} в комнате ${roomId}`);
-        res.json({
-            success: true,
-            message: 'Письмо успешно выбрано'
-        });
-    } catch (error) {
-        console.error('💥 Ошибка при выборе письма:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Ошибка сервера при выборе письма',
-            error: error.message
-        });
-    }
-});
-
 // Удаление письма
 app.delete('/api/letters/:letter_id', async (req, res) => {
     const letterId = req.params.letter_id;
@@ -320,43 +379,387 @@ app.delete('/api/letters/:letter_id', async (req, res) => {
     }
 });
 
-// Вспомогательная функция для получения комнаты с участниками
-async function getRoomWithParticipants(roomId) {
-    const roomResult = await pool.query(`
-        SELECT r.id_room, r.name_room, r.pass_room, r.created_by,
-               u.username as creator_name
-        FROM rooms r
-        JOIN users u ON r.created_by = u.id
-        WHERE r.id_room = $1
-    `, [roomId]);
+// Получение всех комнат
+app.get('/api/rooms/all', async (req, res) => {
+    console.log('🏠 Получен запрос на получение всех комнат');
 
-    const participantsResult = await pool.query(`
-        SELECT 
-            u.id, 
-            u.username,
-            rp.is_ready,
-            rp.selected_letter_id,
-            l.heading as selected_letter_heading,
-            (u.id = $2) as is_current_user,
-            CASE 
-                WHEN u.id = $2 THEN ' (Вы)'
-                WHEN u.id = $3 THEN ' (создатель)'
-                ELSE ''
-            END as user_role
-        FROM room_participants rp
-        JOIN users u ON rp.user_id = u.id
-        LEFT JOIN letters l ON rp.selected_letter_id = l.id_letter
-        WHERE rp.room_id = $1
-        ORDER BY 
-            CASE WHEN u.id = $3 THEN 0 ELSE 1 END,
-            rp.joined_at
-    `, [roomId, roomResult.rows[0].created_by, roomResult.rows[0].created_by]);
+    try {
+        const result = await pool.query(`
+            SELECT r.id_room, r.name_room, r.created_by,
+                   COUNT(rp.user_id) as participants_count,
+                   u.username as creator_name
+            FROM rooms r
+            LEFT JOIN room_participants rp ON r.id_room = rp.room_id
+            JOIN users u ON r.created_by = u.id
+            GROUP BY r.id_room, r.name_room, r.created_by, u.username
+            ORDER BY r.id_room DESC
+        `);
 
-    return {
-        room: roomResult.rows[0],
-        participants: participantsResult.rows
-    };
-}
+        console.log(`✅ Найдено всех комнат: ${result.rows.length}`);
+        res.json({
+            success: true,
+            rooms: result.rows
+        });
+    } catch (error) {
+        console.error('💥 Ошибка при получении всех комнат:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при получении комнат',
+            error: error.message
+        });
+    }
+});
+
+// Получение информации о комнате
+app.get('/api/rooms/:room_id', async (req, res) => {
+    const roomId = req.params.room_id;
+    console.log('📋 Получен запрос на информацию о комнате:', roomId);
+
+    try {
+        const roomInfo = await getRoomWithParticipants(roomId);
+
+        if (!roomInfo) {
+            return res.status(404).json({
+                success: false,
+                message: 'Комната не найдена'
+            });
+        }
+
+        console.log(`✅ Участники комнаты ${roomId}: ${roomInfo.participants.length}`);
+        res.json({
+            success: true,
+            room: roomInfo.room,
+            participants: roomInfo.participants,
+            lastUpdated: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('💥 Ошибка при получении информации о комнате:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при получении информации о комнате',
+            error: error.message
+        });
+    }
+});
+
+// Создание новой комнаты
+app.post('/api/rooms', async (req, res) => {
+    const { name_room, created_by, pass_room } = req.body;
+    console.log('🏗️ Получен запрос на создание комнаты:', { name_room, created_by, pass_room });
+
+    if (!name_room || !created_by || !pass_room) {
+        return res.status(400).json({
+            success: false,
+            message: 'Название комнаты, ID создателя и пароль обязательны'
+        });
+    }
+
+    try {
+        const roomResult = await pool.query(
+            'INSERT INTO rooms (name_room, pass_room, created_by) VALUES ($1, $2, $3) RETURNING *',
+            [name_room.trim(), pass_room.trim(), created_by]
+        );
+
+        const room = roomResult.rows[0];
+
+        await pool.query(
+            'INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2)',
+            [room.id_room, created_by]
+        );
+
+        console.log(`✅ Комната создана с ID: ${room.id_room} и названием: ${name_room}`);
+        res.json({
+            success: true,
+            room: room,
+            message: 'Комната успешно создана'
+        });
+    } catch (error) {
+        console.error('💥 Ошибка при создании комнаты:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при создании комнаты',
+            error: error.message
+        });
+    }
+});
+
+// Присоединение к комнате
+app.post('/api/rooms/join', async (req, res) => {
+    const { room_id, pass_room, user_id } = req.body;
+    console.log('🔑 Получен запрос на присоединение к комнате:', { room_id, pass_room, user_id });
+
+    if (!room_id || !pass_room || !user_id) {
+        return res.status(400).json({
+            success: false,
+            message: 'ID комнаты, пароль комнаты и ID пользователя обязательны'
+        });
+    }
+
+    try {
+        const roomResult = await pool.query(
+            'SELECT * FROM rooms WHERE id_room = $1 AND pass_room = $2',
+            [room_id, pass_room]
+        );
+
+        if (roomResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Неверный пароль для выбранной комнаты'
+            });
+        }
+
+        const room = roomResult.rows[0];
+
+        const existingParticipant = await pool.query(
+            'SELECT * FROM room_participants WHERE room_id = $1 AND user_id = $2',
+            [room.id_room, user_id]
+        );
+
+        if (existingParticipant.rows.length > 0) {
+            console.log(`✅ Пользователь ${user_id} уже в комнате ${room.id_room}`);
+            return res.json({
+                success: true,
+                room: room,
+                message: 'Вы уже в этой комнате'
+            });
+        }
+
+        await pool.query(
+            'INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2)',
+            [room.id_room, user_id]
+        );
+
+        console.log(`✅ Пользователь ${user_id} присоединился к комнате ${room.id_room}`);
+
+        // Отправляем событие о присоединении
+        const roomInfo = await getRoomWithParticipants(room.id_room);
+        broadcastToRoom(room.id_room, {
+            type: 'participant_joined',
+            room: roomInfo.room,
+            participants: roomInfo.participants,
+            ready_count: roomInfo.participants.filter(p => p.is_ready).length,
+            total_participants: roomInfo.participants.length,
+            timestamp: new Date().toISOString()
+        });
+
+        res.json({
+            success: true,
+            room: room,
+            message: 'Вы успешно присоединились к комнате'
+        });
+    } catch (error) {
+        console.error('💥 Ошибка при присоединении к комнате:', error);
+
+        if (error.code === '23503') {
+            return res.status(400).json({
+                success: false,
+                message: 'Пользователь не существует'
+            });
+        } else if (error.code === '23505') {
+            console.log(`✅ Пользователь ${user_id} уже в комнате (unique violation)`);
+            const roomResult = await pool.query(
+                'SELECT * FROM rooms WHERE id_room = $1 AND pass_room = $2',
+                [room_id, pass_room]
+            );
+            if (roomResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Неверный пароль для выбранной комнаты'
+                });
+            }
+            return res.json({
+                success: true,
+                room: roomResult.rows[0],
+                message: 'Вы уже в этой комнате'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при присоединении к комнате',
+            error: error.message
+        });
+    }
+});
+
+// Выход из комнаты
+app.post('/api/rooms/leave', async (req, res) => {
+    const { room_id, user_id } = req.body;
+    console.log('🚪 Получен запрос на выход из комнаты:', { room_id, user_id });
+
+    if (!room_id || !user_id) {
+        return res.status(400).json({
+            success: false,
+            message: 'ID комнаты и ID пользователя обязательны'
+        });
+    }
+
+    try {
+        const roomResult = await pool.query(
+            'SELECT * FROM rooms WHERE id_room = $1',
+            [room_id]
+        );
+
+        if (roomResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Комната не найдена'
+            });
+        }
+
+        const room = roomResult.rows[0];
+
+        if (room.created_by == user_id) {
+            await pool.query('DELETE FROM room_participants WHERE room_id = $1', [room_id]);
+            await pool.query('DELETE FROM rooms WHERE id_room = $1', [room_id]);
+
+            console.log(`✅ Комната ${room_id} удалена, так как вышел создатель`);
+
+            // Отправляем событие об удалении комнаты
+            broadcastToRoom(room_id, {
+                type: 'room_deleted',
+                message: 'Комната удалена',
+                timestamp: new Date().toISOString()
+            });
+
+            res.json({
+                success: true,
+                message: 'Комната удалена',
+                roomDeleted: true
+            });
+        } else {
+            await pool.query(
+                'DELETE FROM room_participants WHERE room_id = $1 AND user_id = $2',
+                [room_id, user_id]
+            );
+
+            console.log(`✅ Пользователь ${user_id} вышел из комнаты ${room_id}`);
+
+            // Отправляем событие о выходе
+            const roomInfo = await getRoomWithParticipants(room_id);
+            broadcastToRoom(room_id, {
+                type: 'participant_left',
+                room: roomInfo.room,
+                participants: roomInfo.participants,
+                ready_count: roomInfo.participants.filter(p => p.is_ready).length,
+                total_participants: roomInfo.participants.length,
+                timestamp: new Date().toISOString()
+            });
+
+            res.json({
+                success: true,
+                message: 'Вы вышли из комнаты',
+                roomDeleted: false
+            });
+        }
+    } catch (error) {
+        console.error('💥 Ошибка при выходе из комнаты:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при выходе из комнаты',
+            error: error.message
+        });
+    }
+});
+
+// Получение писем пользователя для комбобокса
+app.get('/api/user/letters', async (req, res) => {
+    const { user_id } = req.query;
+    console.log('📨 Получен запрос на получение писем пользователя для комбобокса:', user_id);
+
+    if (!user_id) {
+        return res.status(400).json({
+            success: false,
+            message: 'ID пользователя обязателен'
+        });
+    }
+
+    try {
+        const lettersTableExists = await checkTableExists('letters');
+        if (!lettersTableExists) {
+            return res.json({
+                success: true,
+                letters: []
+            });
+        }
+
+        const result = await pool.query(
+            'SELECT id_letter, heading, message FROM letters WHERE id = $1 ORDER BY id_letter DESC',
+            [user_id]
+        );
+
+        res.json({
+            success: true,
+            letters: result.rows
+        });
+    } catch (error) {
+        console.error('💥 Ошибка при получении писем пользователя:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при получении писем',
+            error: error.message
+        });
+    }
+});
+
+// Сохранение выбранного письма пользователем
+app.post('/api/rooms/:room_id/select-letter', async (req, res) => {
+    const roomId = req.params.room_id;
+    const { user_id, letter_id } = req.body;
+    console.log('📝 Получен запрос на выбор письма:', { roomId, user_id, letter_id });
+
+    if (!user_id || !letter_id) {
+        return res.status(400).json({
+            success: false,
+            message: 'ID пользователя и письма обязательны'
+        });
+    }
+
+    try {
+        const participantCheck = await pool.query(
+            'SELECT * FROM room_participants WHERE room_id = $1 AND user_id = $2',
+            [roomId, user_id]
+        );
+
+        if (participantCheck.rows.length === 0) {
+            return res.status(403).json({
+                success: false,
+                message: 'Пользователь не является участником комнаты'
+            });
+        }
+
+        const result = await pool.query(
+            'UPDATE room_participants SET selected_letter_id = $1 WHERE room_id = $2 AND user_id = $3 RETURNING *',
+            [letter_id, roomId, user_id]
+        );
+
+        console.log(`✅ Пользователь ${user_id} выбрал письмо ${letter_id} в комнате ${roomId}`);
+
+        // Отправляем событие о выборе письма
+        const roomInfo = await getRoomWithParticipants(roomId);
+        broadcastToRoom(roomId, {
+            type: 'letter_selected',
+            user_id: user_id,
+            room: roomInfo.room,
+            participants: roomInfo.participants,
+            ready_count: roomInfo.participants.filter(p => p.is_ready).length,
+            total_participants: roomInfo.participants.length,
+            timestamp: new Date().toISOString()
+        });
+
+        res.json({
+            success: true,
+            message: 'Письмо успешно выбрано'
+        });
+    } catch (error) {
+        console.error('💥 Ошибка при выборе письма:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ошибка сервера при выборе письма',
+            error: error.message
+        });
+    }
+});
 
 // Изменение статуса готовности
 app.post('/api/rooms/:room_id/toggle-ready', async (req, res) => {
@@ -372,7 +775,6 @@ app.post('/api/rooms/:room_id/toggle-ready', async (req, res) => {
     }
 
     try {
-        // Проверяем, что пользователь выбрал письмо
         const participant = await pool.query(
             'SELECT selected_letter_id FROM room_participants WHERE room_id = $1 AND user_id = $2',
             [roomId, user_id]
@@ -392,7 +794,6 @@ app.post('/api/rooms/:room_id/toggle-ready', async (req, res) => {
             });
         }
 
-        // Переключаем статус готовности
         const result = await pool.query(
             'UPDATE room_participants SET is_ready = NOT is_ready WHERE room_id = $1 AND user_id = $2 RETURNING is_ready',
             [roomId, user_id]
@@ -401,8 +802,19 @@ app.post('/api/rooms/:room_id/toggle-ready', async (req, res) => {
         const newReadyStatus = result.rows[0].is_ready;
         console.log(`✅ Пользователь ${user_id} изменил статус готовности на: ${newReadyStatus}`);
 
-        // Получаем обновленную информацию о комнате
         const roomInfo = await getRoomWithParticipants(roomId);
+
+        // Отправляем событие об изменении готовности
+        broadcastToRoom(roomId, {
+            type: 'ready_status_changed',
+            user_id: user_id,
+            is_ready: newReadyStatus,
+            room: roomInfo.room,
+            participants: roomInfo.participants,
+            ready_count: roomInfo.participants.filter(p => p.is_ready).length,
+            total_participants: roomInfo.participants.length,
+            timestamp: new Date().toISOString()
+        });
 
         res.json({
             success: true,
@@ -436,7 +848,6 @@ app.post('/api/rooms/:room_id/draw', async (req, res) => {
     }
 
     try {
-        // Проверяем, что пользователь - создатель комнаты
         const roomResult = await pool.query(
             'SELECT created_by FROM rooms WHERE id_room = $1',
             [roomId]
@@ -456,7 +867,6 @@ app.post('/api/rooms/:room_id/draw', async (req, res) => {
             });
         }
 
-        // Проверяем, что все участники готовы
         const participantsResult = await pool.query(`
             SELECT rp.user_id, rp.is_ready, rp.selected_letter_id, u.username
             FROM room_participants rp
@@ -489,20 +899,17 @@ app.post('/api/rooms/:room_id/draw', async (req, res) => {
             });
         }
 
-        // Алгоритм розыгрыша - гарантируем, что никто не получит свое письмо
         let shuffled = [...participants];
         let valid = false;
         let attempts = 0;
         const maxAttempts = 100;
 
         while (!valid && attempts < maxAttempts) {
-            // Перемешиваем массив
             for (let i = shuffled.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
                 [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
             }
 
-            // Проверяем, что никто не получил свое письмо
             valid = true;
             for (let i = 0; i < participants.length; i++) {
                 if (participants[i].user_id === shuffled[i].user_id) {
@@ -520,7 +927,6 @@ app.post('/api/rooms/:room_id/draw', async (req, res) => {
             });
         }
 
-        // Сохраняем результаты розыгрыша
         for (let i = 0; i < participants.length; i++) {
             await pool.query(
                 'INSERT INTO room_draws (room_id, santa_id, receiver_id) VALUES ($1, $2, $3)',
@@ -530,7 +936,6 @@ app.post('/api/rooms/:room_id/draw', async (req, res) => {
 
         console.log(`✅ Розыгрыш в комнате ${roomId} завершен успешно`);
 
-        // Получаем результаты розыгрыша для ответа
         const drawResults = await pool.query(`
             SELECT 
                 rd.santa_id,
@@ -546,6 +951,13 @@ app.post('/api/rooms/:room_id/draw', async (req, res) => {
             JOIN letters letter ON rp.selected_letter_id = letter.id_letter
             WHERE rd.room_id = $1
         `, [roomId]);
+
+        // Отправляем событие о завершении розыгрыша
+        broadcastToRoom(roomId, {
+            type: 'draw_completed',
+            results: drawResults.rows,
+            timestamp: new Date().toISOString()
+        });
 
         res.json({
             success: true,
@@ -613,305 +1025,10 @@ app.get('/api/rooms/:room_id/draw-result', async (req, res) => {
     }
 });
 
-
-// Получение всех комнат (публичных) для отображения всем пользователям
-app.get('/api/rooms/all', async (req, res) => {
-    console.log('🏠 Получен запрос на получение всех комнат');
-
-    try {
-        const result = await pool.query(`
-            SELECT r.id_room, r.name_room, r.created_by,
-                   COUNT(rp.user_id) as participants_count,
-                   u.username as creator_name
-            FROM rooms r
-            LEFT JOIN room_participants rp ON r.id_room = rp.room_id
-            JOIN users u ON r.created_by = u.id
-            GROUP BY r.id_room, r.name_room, r.created_by, u.username
-            ORDER BY r.id_room DESC
-        `);
-
-        console.log(`✅ Найдено всех комнат: ${result.rows.length}`);
-        res.json({
-            success: true,
-            rooms: result.rows
-        });
-    } catch (error) {
-        console.error('💥 Ошибка при получении всех комнат:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Ошибка сервера при получении комнат',
-            error: error.message
-        });
-    }
-});
-
-// Получение информации о конкретной комнате - ОБНОВЛЯЕМ ДЛЯ ДИНАМИКИ
-app.get('/api/rooms/:room_id', async (req, res) => {
-    const roomId = req.params.room_id;
-    console.log('📋 Получен запрос на информацию о комнате:', roomId);
-
-    try {
-        const roomResult = await pool.query(`
-            SELECT r.id_room, r.name_room, r.pass_room, r.created_by,
-                   u.username as creator_name
-            FROM rooms r
-            JOIN users u ON r.created_by = u.id
-            WHERE r.id_room = $1
-        `, [roomId]);
-
-        if (roomResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Комната не найдена'
-            });
-        }
-
-        const room = roomResult.rows[0];
-
-        // Получаем участников комнаты
-        const participantsResult = await pool.query(`
-            SELECT 
-                u.id, 
-                u.username,
-                rp.joined_at,
-                (u.id = $2) as is_current_user,
-                CASE 
-                    WHEN u.id = $2 THEN ' (Вы)'
-                    WHEN u.id = $3 THEN ' (создатель)'
-                    ELSE ''
-                END as user_role
-            FROM room_participants rp
-            JOIN users u ON rp.user_id = u.id
-            WHERE rp.room_id = $1
-            ORDER BY 
-                CASE WHEN u.id = $3 THEN 0 ELSE 1 END,
-                rp.joined_at
-        `, [roomId, room.created_by, room.created_by]);
-
-        console.log(`✅ Участники комнаты ${roomId}: ${participantsResult.rows.length}`);
-
-        res.json({
-            success: true,
-            room: room,
-            participants: participantsResult.rows,
-            lastUpdated: new Date().toISOString() // Добавляем время обновления
-        });
-    } catch (error) {
-        console.error('💥 Ошибка при получении информации о комнате:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Ошибка сервера при получении информации о комнате',
-            error: error.message
-        });
-    }
-});
-
-// Присоединение к комнате по паролю - ИСПРАВЛЕННАЯ ВЕРСИЯ
-app.post('/api/rooms/join', async (req, res) => {
-    const { room_id, pass_room, user_id } = req.body; // Добавляем room_id
-    console.log('🔑 Получен запрос на присоединение к комнате:', { room_id, pass_room, user_id });
-
-    if (!room_id || !pass_room || !user_id) {
-        return res.status(400).json({
-            success: false,
-            message: 'ID комнаты, пароль комнаты и ID пользователя обязательны'
-        });
-    }
-
-    try {
-        // Находим комнату по ID и проверяем пароль
-        const roomResult = await pool.query(
-            'SELECT * FROM rooms WHERE id_room = $1 AND pass_room = $2',
-            [room_id, pass_room]
-        );
-
-        if (roomResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Неверный пароль для выбранной комнаты'
-            });
-        }
-
-        const room = roomResult.rows[0];
-
-        // Проверяем, не участник ли уже
-        const existingParticipant = await pool.query(
-            'SELECT * FROM room_participants WHERE room_id = $1 AND user_id = $2',
-            [room.id_room, user_id]
-        );
-
-        if (existingParticipant.rows.length > 0) {
-            console.log(`✅ Пользователь ${user_id} уже в комнате ${room.id_room} - возвращаем данные комнаты`);
-            return res.json({
-                success: true,
-                room: room,
-                message: 'Вы уже в этой комнате'
-            });
-        }
-
-        // Добавляем участника
-        await pool.query(
-            'INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2)',
-            [room.id_room, user_id]
-        );
-
-        console.log(`✅ Пользователь ${user_id} присоединился к комнате ${room.id_room}`);
-        res.json({
-            success: true,
-            room: room,
-            message: 'Вы успешно присоединились к комнате'
-        });
-    } catch (error) {
-        console.error('💥 Ошибка при присоединении к комнате:', error);
-
-        // Проверяем конкретные ошибки PostgreSQL
-        if (error.code === '23503') { // foreign key violation
-            return res.status(400).json({
-                success: false,
-                message: 'Пользователь не существует'
-            });
-        } else if (error.code === '23505') { // unique violation
-            // Если уже участник - возвращаем успех
-            console.log(`✅ Пользователь ${user_id} уже в комнате (unique violation)`);
-            const roomResult = await pool.query(
-                'SELECT * FROM rooms WHERE id_room = $1 AND pass_room = $2',
-                [room_id, pass_room]
-            );
-            if (roomResult.rows.length === 0) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Неверный пароль для выбранной комнаты'
-                });
-            }
-            return res.json({
-                success: true,
-                room: roomResult.rows[0],
-                message: 'Вы уже в этой комнате'
-            });
-        }
-
-        res.status(500).json({
-            success: false,
-            message: 'Ошибка сервера при присоединении к комнате',
-            error: error.message
-        });
-    }
-});
-
-// Создание новой комнаты БЕЗ проверки уникальности названия
-app.post('/api/rooms', async (req, res) => {
-    const { name_room, created_by, pass_room } = req.body;
-    console.log('🏗️ Получен запрос на создание комнаты:', { name_room, created_by, pass_room });
-
-    if (!name_room || !created_by || !pass_room) {
-        return res.status(400).json({
-            success: false,
-            message: 'Название комнаты, ID создателя и пароль обязательны'
-        });
-    }
-
-    try {
-        // УБИРАЕМ проверку на уникальность названия - комнаты могут иметь одинаковые названия
-        // Создаем комнату с предоставленным паролем
-        const roomResult = await pool.query(
-            'INSERT INTO rooms (name_room, pass_room, created_by) VALUES ($1, $2, $3) RETURNING *',
-            [name_room.trim(), pass_room.trim(), created_by]
-        );
-
-        const room = roomResult.rows[0];
-
-        // Автоматически добавляем создателя в участники
-        await pool.query(
-            'INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2)',
-            [room.id_room, created_by]
-        );
-
-        console.log(`✅ Комната создана с ID: ${room.id_room} и названием: ${name_room}`);
-        res.json({
-            success: true,
-            room: room,
-            message: 'Комната успешно создана'
-        });
-    } catch (error) {
-        console.error('💥 Ошибка при создании комнаты:', error);
-
-        // Убираем проверку на уникальность названия
-        res.status(500).json({
-            success: false,
-            message: 'Ошибка сервера при создании комнаты',
-            error: error.message
-        });
-    }
-});
-
-// Выход из комнаты (с удалением комнаты если вышел создатель)
-app.post('/api/rooms/leave', async (req, res) => {
-    const { room_id, user_id } = req.body;
-    console.log('🚪 Получен запрос на выход из комнаты:', { room_id, user_id });
-
-    if (!room_id || !user_id) {
-        return res.status(400).json({
-            success: false,
-            message: 'ID комнаты и ID пользователя обязательны'
-        });
-    }
-
-    try {
-        // Получаем информацию о комнате
-        const roomResult = await pool.query(
-            'SELECT * FROM rooms WHERE id_room = $1',
-            [room_id]
-        );
-
-        if (roomResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Комната не найдена'
-            });
-        }
-
-        const room = roomResult.rows[0];
-
-        // Проверяем, является ли пользователь создателем комнаты
-        if (room.created_by == user_id) {
-            // Если создатель выходит - удаляем комнату полностью
-            await pool.query('DELETE FROM room_participants WHERE room_id = $1', [room_id]);
-            await pool.query('DELETE FROM rooms WHERE id_room = $1', [room_id]);
-
-            console.log(`✅ Комната ${room_id} удалена, так как вышел создатель`);
-            res.json({
-                success: true,
-                message: 'Комната удалена',
-                roomDeleted: true
-            });
-        } else {
-            // Если обычный участник - просто удаляем его из участников
-            await pool.query(
-                'DELETE FROM room_participants WHERE room_id = $1 AND user_id = $2',
-                [room_id, user_id]
-            );
-
-            console.log(`✅ Пользователь ${user_id} вышел из комнаты ${room_id}`);
-            res.json({
-                success: true,
-                message: 'Вы вышли из комнаты',
-                roomDeleted: false
-            });
-        }
-    } catch (error) {
-        console.error('💥 Ошибка при выходе из комнаты:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Ошибка сервера при выходе из комнаты',
-            error: error.message
-        });
-    }
-});
-
-// Получение писем пользователя для комбобокса
-app.get('/api/user/letters', async (req, res) => {
+// Получение писем, которые пользователь получил как Тайный Санта
+app.get('/api/my-santa-letters', async (req, res) => {
     const { user_id } = req.query;
-    console.log('📨 Получен запрос на получение писем пользователя для комбобокса:', user_id);
+    console.log('🎅 Получен запрос на получение писем Тайного Санты:', user_id);
 
     if (!user_id) {
         return res.status(400).json({
@@ -921,25 +1038,30 @@ app.get('/api/user/letters', async (req, res) => {
     }
 
     try {
-        const lettersTableExists = await checkTableExists('letters');
-        if (!lettersTableExists) {
-            return res.json({
-                success: true,
-                letters: []
-            });
-        }
+        const result = await pool.query(`
+            SELECT 
+                rd.id,
+                r.name_room,
+                rd.drawn_at,
+                receiver.username as receiver_name,
+                letter.heading as letter_heading,
+                letter.message as letter_message
+            FROM room_draws rd
+            JOIN rooms r ON rd.room_id = r.id_room
+            JOIN users receiver ON rd.receiver_id = receiver.id
+            JOIN room_participants rp ON rd.receiver_id = rp.user_id AND rd.room_id = rp.room_id
+            JOIN letters letter ON rp.selected_letter_id = letter.id_letter
+            WHERE rd.santa_id = $1
+            ORDER BY rd.drawn_at DESC
+        `, [user_id]);
 
-        const result = await pool.query(
-            'SELECT id_letter, heading, message FROM letters WHERE id = $1 ORDER BY id_letter DESC',
-            [user_id]
-        );
-
+        console.log(`✅ Найдено писем для Санты: ${result.rows.length} для пользователя ${user_id}`);
         res.json({
             success: true,
             letters: result.rows
         });
     } catch (error) {
-        console.error('💥 Ошибка при получении писем пользователя:', error);
+        console.error('💥 Ошибка при получении писем Тайного Санты:', error);
         res.status(500).json({
             success: false,
             message: 'Ошибка сервера при получении писем',

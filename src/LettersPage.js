@@ -5,82 +5,73 @@ import axios from 'axios';
 const API_BASE = 'http://localhost:5000';
 
 function LettersPage({ currentUser, onNavigate, onBack }) {
-    const [letters, setLetters] = useState([]);
-    const [filter, setFilter] = useState('my');
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [editingLetter, setEditingLetter] = useState(null);
-    const [newLetter, setNewLetter] = useState({ heading: '', message: '' });
-    const [loading, setLoading] = useState(true);
-    const [hoveredLetterId, setHoveredLetterId] = useState(null);
+    const [activeTab, setActiveTab] = useState('my-letters'); // 'my-letters' или 'santa-letters'
+    const [myLetters, setMyLetters] = useState([]);
+    const [santaLetters, setSantaLetters] = useState([]);
+    const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [showModal, setShowModal] = useState(false);
+    const [newLetter, setNewLetter] = useState({ heading: '', message: '' });
+    const [editingLetter, setEditingLetter] = useState(null);
+    const [hoveredLetterId, setHoveredLetterId] = useState(null);
     const [retryCount, setRetryCount] = useState(0);
 
-    // Проверка здоровья сервера
-    const checkServerHealth = async () => {
-        try {
-            const response = await axios.get(`${API_BASE}/api/health`);
-            console.log('✅ Сервер доступен:', response.data);
-            return true;
-        } catch (error) {
-            console.error('❌ Сервер недоступен:', error);
-            return false;
-        }
-    };
-
-    // Загрузка писем при монтировании компонента
     useEffect(() => {
-        fetchLetters();
-    }, [currentUser, filter, retryCount]);
+        if (currentUser) {
+            if (activeTab === 'my-letters') {
+                fetchMyLetters();
+            } else {
+                fetchSantaLetters();
+            }
+        }
+    }, [currentUser, activeTab, retryCount]);
 
-    // Функция загрузки писем из базы данных
-    const fetchLetters = async () => {
+    const fetchMyLetters = async () => {
         try {
             setLoading(true);
             setError('');
 
-            // Сначала проверяем доступность сервера
-            const isHealthy = await checkServerHealth();
-            if (!isHealthy) {
-                setError('Сервер недоступен. Проверьте, запущен ли сервер на localhost:5000');
-                setLoading(false);
-                return;
-            }
+            const response = await axios.get(`${API_BASE}/api/letters`, {
+                params: { user_id: currentUser?.id },
+                timeout: 10000
+            });
 
-            if (filter === 'my') {
-                const response = await axios.get(`${API_BASE}/api/letters`, {
-                    params: { user_id: currentUser?.id },
-                    timeout: 10000 // 10 секунд таймаут
-                });
-
-                if (response.data.success) {
-                    setLetters(response.data.letters || []);
-                    console.log('✅ Письма успешно загружены:', response.data.letters);
-                } else {
-                    setError(response.data.message || 'Ошибка при загрузке писем');
-                }
+            if (response.data.success) {
+                setMyLetters(response.data.letters || []);
             } else {
-                setLetters([]);
+                setError(response.data.message || 'Ошибка при загрузке писем');
             }
         } catch (error) {
             console.error('💥 Ошибка при загрузке писем:', error);
-
-            if (error.code === 'ECONNABORTED') {
-                setError('Таймаут запроса. Сервер не отвечает');
-            } else if (error.response) {
-                // Сервер ответил с ошибкой
-                setError(error.response.data.message || `Ошибка сервера: ${error.response.status}`);
-            } else if (error.request) {
-                // Запрос был сделан, но ответ не получен
-                setError('Сервер не отвечает. Проверьте: 1) Запущен ли сервер, 2) Правильный ли адрес: ' + API_BASE);
-            } else {
-                setError('Неизвестная ошибка: ' + error.message);
-            }
+            handleApiError(error, 'загрузке писем');
         } finally {
             setLoading(false);
         }
     };
 
-    // Функция создания нового письма
+    const fetchSantaLetters = async () => {
+        try {
+            setLoading(true);
+            setError('');
+
+            const response = await axios.get(`${API_BASE}/api/my-santa-letters`, {
+                params: { user_id: currentUser?.id },
+                timeout: 10000
+            });
+
+            if (response.data.success) {
+                setSantaLetters(response.data.letters || []);
+            } else {
+                setError(response.data.message || 'Ошибка при загрузке писем');
+            }
+        } catch (error) {
+            console.error('💥 Ошибка при загрузке писем Санты:', error);
+            handleApiError(error, 'загрузке писем');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handleCreateLetter = async () => {
         try {
             setError('');
@@ -99,11 +90,10 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
             });
 
             if (response.data.success) {
-                setLetters([response.data.letter, ...letters]);
-                setIsModalOpen(false);
+                setMyLetters([response.data.letter, ...myLetters]);
+                setShowModal(false);
                 setNewLetter({ heading: '', message: '' });
                 setError('');
-                console.log('✅ Письмо успешно создано:', response.data.letter);
             } else {
                 setError(response.data.message || 'Ошибка при создании письма');
             }
@@ -113,7 +103,6 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
         }
     };
 
-    // Функция обновления письма
     const handleUpdateLetter = async () => {
         try {
             setError('');
@@ -131,12 +120,11 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
             });
 
             if (response.data.success) {
-                setLetters(letters.map(letter =>
+                setMyLetters(myLetters.map(letter =>
                     letter.id_letter === editingLetter.id_letter ? editingLetter : letter
                 ));
                 setEditingLetter(null);
                 setError('');
-                console.log('✅ Письмо успешно обновлено:', editingLetter.id_letter);
             } else {
                 setError(response.data.message || 'Ошибка при обновлении письма');
             }
@@ -146,7 +134,6 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
         }
     };
 
-    // Функция удаления письма
     const handleDeleteLetter = async (letterId) => {
         try {
             setError('');
@@ -156,8 +143,7 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
             });
 
             if (response.data.success) {
-                setLetters(letters.filter(letter => letter.id_letter !== letterId));
-                console.log('✅ Письмо успешно удалено:', letterId);
+                setMyLetters(myLetters.filter(letter => letter.id_letter !== letterId));
             } else {
                 setError(response.data.message || 'Ошибка при удалении письма');
             }
@@ -167,7 +153,6 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
         }
     };
 
-    // Обработчик ошибок API
     const handleApiError = (error, operation) => {
         if (error.code === 'ECONNABORTED') {
             setError(`Таймаут при ${operation}. Сервер не отвечает`);
@@ -180,26 +165,23 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
         }
     };
 
-    // Открытие модального окна для редактирования
     const openEditModal = (letter) => {
         setEditingLetter({ ...letter });
     };
 
-    // Закрытие модального окна
     const closeModal = () => {
-        setIsModalOpen(false);
+        setShowModal(false);
         setEditingLetter(null);
         setNewLetter({ heading: '', message: '' });
         setError('');
     };
 
-    // Повторная попытка загрузки
     const handleRetry = () => {
         setRetryCount(prev => prev + 1);
         setError('');
     };
 
-    // Стили (остаются без изменений)
+    // Стили
     const containerStyle = {
         padding: '40px 20px',
         maxWidth: '1200px',
@@ -214,29 +196,30 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
         marginBottom: '30px'
     };
 
-    const controlsStyle = {
+    const tabsStyle = {
         display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '20px',
-        gap: '15px'
-    };
-
-    const filterButtonsStyle = {
-        display: 'flex',
+        justifyContent: 'center',
+        marginBottom: '30px',
         gap: '10px'
     };
 
-    const filterButtonStyle = (isActive) => ({
-        padding: '10px 20px',
-        backgroundColor: isActive ? '#4ecdc4' : 'rgba(255, 255, 255, 0.2)',
-        color: 'white',
-        border: 'none',
+    const tabStyle = (isActive) => ({
+        padding: '12px 24px',
+        backgroundColor: isActive ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.1)',
+        border: isActive ? '2px solid rgba(255, 255, 255, 0.3)' : '2px solid transparent',
         borderRadius: '8px',
         cursor: 'pointer',
         fontWeight: 'bold',
         transition: 'all 0.3s ease'
     });
+
+    const controlsStyle = {
+        display: 'flex',
+        justifyContent: 'flex-end',
+        alignItems: 'center',
+        marginBottom: '20px',
+        gap: '15px'
+    };
 
     const addButtonStyle = {
         padding: '10px 20px',
@@ -255,7 +238,7 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
         backdropFilter: 'blur(10px)',
         borderRadius: '15px',
         padding: '20px',
-        height: '500px',
+        minHeight: '500px',
         overflowY: 'auto',
         marginBottom: '30px',
         border: '1px solid rgba(255, 255, 255, 0.2)'
@@ -386,6 +369,12 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
         marginLeft: '10px'
     };
 
+    const santaLetterInfoStyle = {
+        fontSize: '0.8rem',
+        opacity: '0.8',
+        marginTop: '5px'
+    };
+
     return (
         <div style={containerStyle}>
             {/* Заголовок */}
@@ -397,47 +386,43 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
                 }}>
                     ✉️ Мои письма
                 </h1>
-                <p style={{ fontSize: '1.1rem', opacity: '0.9' }}>
-                    Управляйте вашими письмами Тайного Санты
-                </p>
             </div>
 
-            {/* Панель управления */}
-            <div style={controlsStyle}>
-                <div style={filterButtonsStyle}>
+            {/* Вкладки */}
+            <div style={tabsStyle}>
+                <div
+                    style={tabStyle(activeTab === 'my-letters')}
+                    onClick={() => setActiveTab('my-letters')}
+                >
+                    📝 Мои письма
+                </div>
+                <div
+                    style={tabStyle(activeTab === 'santa-letters')}
+                    onClick={() => setActiveTab('santa-letters')}
+                >
+                    🎅 Письма мне
+                </div>
+            </div>
+
+            {/* Панель управления (только для вкладки "Мои письма") */}
+            {activeTab === 'my-letters' && (
+                <div style={controlsStyle}>
                     <button
-                        style={filterButtonStyle(filter === 'my')}
-                        onClick={() => setFilter('my')}
-                        onMouseEnter={(e) => !(filter === 'my') && (e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)')}
-                        onMouseLeave={(e) => !(filter === 'my') && (e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)')}
+                        style={addButtonStyle}
+                        onClick={() => setShowModal(true)}
+                        onMouseEnter={(e) => {
+                            e.target.style.transform = 'scale(1.1)';
+                            e.target.style.boxShadow = '0 4px 15px rgba(0,0,0,0.2)';
+                        }}
+                        onMouseLeave={(e) => {
+                            e.target.style.transform = 'scale(1)';
+                            e.target.style.boxShadow = 'none';
+                        }}
                     >
-                        Мои письма
-                    </button>
-                    <button
-                        style={filterButtonStyle(filter === 'received')}
-                        onClick={() => setFilter('received')}
-                        onMouseEnter={(e) => !(filter === 'received') && (e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)')}
-                        onMouseLeave={(e) => !(filter === 'received') && (e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)')}
-                    >
-                        Письма мне
+                        +
                     </button>
                 </div>
-
-                <button
-                    style={addButtonStyle}
-                    onClick={() => setIsModalOpen(true)}
-                    onMouseEnter={(e) => {
-                        e.target.style.transform = 'scale(1.1)';
-                        e.target.style.boxShadow = '0 4px 15px rgba(0,0,0,0.2)';
-                    }}
-                    onMouseLeave={(e) => {
-                        e.target.style.transform = 'scale(1)';
-                        e.target.style.boxShadow = 'none';
-                    }}
-                >
-                    +
-                </button>
-            </div>
+            )}
 
             {/* Сообщения об ошибках */}
             {error && (
@@ -455,53 +440,90 @@ function LettersPage({ currentUser, onNavigate, onBack }) {
                     <div style={{ textAlign: 'center', padding: '50px' }}>
                         <p>Загрузка писем...</p>
                     </div>
-                ) : letters.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '50px' }}>
-                        <p>{filter === 'my' ? 'У вас пока нет писем. Создайте первое письмо!' : 'Писем для вас пока нет.'}</p>
-                    </div>
-                ) : (
-                    letters.map(letter => (
-                        <div
-                            key={letter.id_letter}
-                            style={letterItemStyle(hoveredLetterId === letter.id_letter)}
-                            onMouseEnter={() => setHoveredLetterId(letter.id_letter)}
-                            onMouseLeave={() => setHoveredLetterId(null)}
-                            onClick={() => openEditModal(letter)}
-                        >
-                            <div style={{ flex: 1 }}>
-                                <h3 style={{ margin: '0 0 5px 0' }}>{letter.heading}</h3>
-                                <p style={{
-                                    margin: 0,
-                                    opacity: 0.8,
-                                    fontSize: '14px',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap'
-                                }}>
-                                    {letter.message}
-                                </p>
-                            </div>
-
-                            {hoveredLetterId === letter.id_letter && filter === 'my' && (
-                                <button
-                                    style={deleteButtonStyle}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (window.confirm('Вы уверены, что хотите удалить это письмо?')) {
-                                            handleDeleteLetter(letter.id_letter);
-                                        }
-                                    }}
-                                >
-                                    Удалить
-                                </button>
-                            )}
+                ) : activeTab === 'my-letters' ? (
+                    myLetters.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '50px' }}>
+                            <p>У вас пока нет писем. Создайте первое письмо!</p>
                         </div>
-                    ))
+                    ) : (
+                        myLetters.map(letter => (
+                            <div
+                                key={letter.id_letter}
+                                style={letterItemStyle(hoveredLetterId === letter.id_letter)}
+                                onMouseEnter={() => setHoveredLetterId(letter.id_letter)}
+                                onMouseLeave={() => setHoveredLetterId(null)}
+                                onClick={() => openEditModal(letter)}
+                            >
+                                <div style={{ flex: 1 }}>
+                                    <h3 style={{ margin: '0 0 5px 0' }}>{letter.heading}</h3>
+                                    <p style={{
+                                        margin: 0,
+                                        opacity: 0.8,
+                                        fontSize: '14px',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
+                                    }}>
+                                        {letter.message}
+                                    </p>
+                                </div>
+
+                                {hoveredLetterId === letter.id_letter && (
+                                    <button
+                                        style={deleteButtonStyle}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (window.confirm('Вы уверены, что хотите удалить это письмо?')) {
+                                                handleDeleteLetter(letter.id_letter);
+                                            }
+                                        }}
+                                    >
+                                        Удалить
+                                    </button>
+                                )}
+                            </div>
+                        ))
+                    )
+                ) : (
+                    // Вкладка "Письма мне"
+                    santaLetters.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '50px' }}>
+                            <p>Вы пока не получили ни одного письма как Тайный Санта.</p>
+                            <p>Участвуйте в розыгрышах комнат, чтобы получать письма!</p>
+                        </div>
+                    ) : (
+                        santaLetters.map(letter => (
+                            <div
+                                key={letter.id}
+                                style={letterItemStyle(hoveredLetterId === letter.id)}
+                                onMouseEnter={() => setHoveredLetterId(letter.id)}
+                                onMouseLeave={() => setHoveredLetterId(null)}
+                            >
+                                <div style={{ flex: 1 }}>
+                                    <h3 style={{ margin: '0 0 5px 0', color: '#ffd700' }}>
+                                        {letter.letter_heading}
+                                    </h3>
+                                    <p style={{
+                                        whiteSpace: 'pre-wrap',
+                                        lineHeight: '1.5',
+                                        marginBottom: '10px'
+                                    }}>
+                                        {letter.letter_message}
+                                    </p>
+                                    <div style={santaLetterInfoStyle}>
+                                        <div>👤 От: {letter.receiver_name}</div>
+                                        <div>🏠 Комната: {letter.name_room}</div>
+                                        <div>📅 {new Date(letter.drawn_at).toLocaleDateString()}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))
+                    )
                 )}
             </div>
 
             {/* Модальное окно для создания/редактирования */}
-            {(isModalOpen || editingLetter) && (
+            {(showModal || editingLetter) && (
                 <div style={modalOverlayStyle} onClick={closeModal}>
                     <div style={modalContentStyle} onClick={(e) => e.stopPropagation()}>
                         <h2 style={{ marginTop: 0, color: '#333' }}>
