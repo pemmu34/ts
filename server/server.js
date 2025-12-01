@@ -12,9 +12,9 @@ app.use(express.json());
 
 // Подключение к БД MySQL
 const pool = mysql.createPool({
-    host: '127.0.0.1',
-    user: 'pemmu',
-    password: 'postgre123',
+    host: 'localhost',
+    user: 'postgres',
+    password: 'postgre',
     database: 'logins',
     waitForConnections: true,
     connectionLimit: 10,
