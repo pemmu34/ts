@@ -21,6 +21,12 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
 
     // Загрузка комнат при монтировании
     useEffect(() => {
+        if (!currentUser || !currentUser.id) {
+            setError('Пользователь не авторизован');
+            setLoading(false);
+            return;
+        }
+
         fetchRooms();
     }, [currentUser]);
 
@@ -29,27 +35,40 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
             setLoading(true);
             setError('');
 
-            console.log('🔄 Загрузка всех комнат...');
+            if (!currentUser?.id) {
+                setError('Пользователь не авторизован');
+                setLoading(false);
+                return;
+            }
 
-            // Используем эндпоинт для всех комнат
-            const response = await axios.get(`${API_BASE}/api/rooms/all`);
+            console.log('🔄 Загрузка комнат для пользователя:', currentUser.id);
+
+            const response = await axios.get(`${API_BASE}/api/rooms/all`, {
+                params: {
+                    user_id: currentUser.id
+                }
+            });
 
             console.log('✅ Ответ от сервера:', response.data);
 
             if (response.data.success) {
                 setRooms(response.data.rooms || []);
+                if (response.data.rooms.length === 0) {
+                    console.log('ℹ️ Комнат не найдено');
+                }
             } else {
-                setError(response.data.message || 'Ошибка при загрузке комнат');
+                setError('Ошибка загрузки комнат: ' + (response.data.message || 'Неизвестная ошибка'));
             }
         } catch (error) {
             console.error('❌ Ошибка при загрузке комнат:', error);
-
-            if (error.response) {
-                setError(`Ошибка сервера: ${error.response.status} - ${error.response.data?.message || 'Неизвестная ошибка'}`);
+            if (error.response?.status === 400) {
+                setError('ID пользователя обязателен');
+            } else if (error.response?.data?.message) {
+                setError('Ошибка сервера: ' + error.response.data.message);
             } else if (error.request) {
-                setError('Не удалось подключиться к серверу. Проверьте, запущен ли сервер на порту 5000.');
+                setError('Не удалось подключиться к серверу');
             } else {
-                setError('Ошибка при настройке запроса: ' + error.message);
+                setError('Ошибка загрузки комнат: ' + error.message);
             }
         } finally {
             setLoading(false);
@@ -174,48 +193,72 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
         }
     };
 
-    // Стили (остаются без изменений)
+    // Новые стили в синих тонах с прозрачностью и блюром
     const containerStyle = {
         padding: '40px 20px',
-        maxWidth: '1200px',
-        margin: '0 auto',
-        minHeight: '100vh',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        color: 'white'
+        width: '100vw',
+        height: '100vh',
+        minWidth: '1280px',
+        minHeight: '800px',
+        margin: 0,
+        background: 'linear-gradient(135deg, #0a0f2d 0%, #1a1f38 25%, #0c1445 50%, #1a1f38 75%, #0a0f2d 100%)',
+        backgroundSize: '400% 400%',
+        animation: 'gradientShift 15s ease infinite',
+        position: 'relative',
+        overflow: 'auto',
+        fontFamily: 'Arial, sans-serif'
     };
 
     const headerStyle = {
         textAlign: 'center',
-        marginBottom: '30px'
+        marginBottom: '40px',
+        position: 'relative',
+        zIndex: 10
     };
 
     const controlsStyle = {
         display: 'flex',
-        justifyContent: 'flex-end',
-        marginBottom: '20px'
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: '30px',
+        gap: '20px',
+        position: 'relative',
+        zIndex: 10
     };
 
     const addButtonStyle = {
-        padding: '12px 24px',
-        backgroundColor: '#ff6b6b',
+        padding: '15px 30px',
+        background: 'linear-gradient(135deg, #6496ff 0%, #4a7dff 100%)',
         color: 'white',
-        border: 'none',
-        borderRadius: '8px',
+        border: '3px solid rgba(255, 255, 255, 0.3)',
+        borderRadius: '15px',
         cursor: 'pointer',
         fontSize: '18px',
         fontWeight: 'bold',
-        transition: 'all 0.3s ease'
+        transition: 'all 0.3s ease',
+        boxShadow: '0 8px 20px rgba(0,0,0,0.3)',
+        textShadow: '2px 2px 4px rgba(0,0,0,0.5)',
+        fontFamily: 'Arial, sans-serif',
+        backdropFilter: 'blur(10px)'
     };
 
     const roomsPanelStyle = {
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        backdropFilter: 'blur(10px)',
-        borderRadius: '15px',
-        padding: '20px',
-        height: '500px',
+        background: 'rgba(255, 255, 255, 0.08)',
+        backdropFilter: 'blur(15px)',
+        borderRadius: '20px',
+        padding: '25px',
+        width: '90%',
+        height: '100vh',
+        minHeight: '300px',
+        maxHeight: '500px',
+        maxWidth: '800px',
+        margin: '0 auto',
         overflowY: 'auto',
         marginBottom: '30px',
-        border: '1px solid rgba(255, 255, 255, 0.2)'
+        border: '3px solid rgba(100, 150, 255, 0.3)',
+        boxShadow: '0 15px 35px rgba(0,0,0,0.3)',
+        position: 'relative',
+        zIndex: 10
     };
 
     const modalOverlayStyle = {
@@ -224,7 +267,7 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+        backgroundColor: 'rgba(0, 0, 0, 0.8)',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
@@ -232,81 +275,120 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
     };
 
     const modalContentStyle = {
-        backgroundColor: 'white',
-        padding: '30px',
-        borderRadius: '15px',
+        background: 'rgba(255, 255, 255, 0.12)',
+        backdropFilter: 'blur(20px)',
+        padding: '40px',
+        borderRadius: '20px',
         width: '90%',
-        maxWidth: '400px',
-        color: '#333'
+        maxWidth: '500px',
+        maxHeight: '80vh',
+        overflow: 'auto',
+        color: 'white',
+        border: '3px solid rgba(100, 150, 255, 0.5)',
+        boxShadow: '0 20px 50px rgba(0,0,0,0.5), 0 0 30px rgba(100, 150, 255, 0.3)',
+        position: 'relative',
+        fontFamily: 'Arial, sans-serif'
     };
 
     const inputStyle = {
         width: '100%',
-        padding: '12px',
+        padding: '15px',
         marginBottom: '20px',
-        border: '1px solid #ddd',
-        borderRadius: '8px',
+        border: '2px solid rgba(100, 150, 255, 0.5)',
+        borderRadius: '10px',
         fontSize: '16px',
-        boxSizing: 'border-box'
+        boxSizing: 'border-box',
+        background: 'rgba(255, 255, 255, 0.1)',
+        fontFamily: 'Arial, sans-serif',
+        color: 'white',
+        backdropFilter: 'blur(10px)'
     };
 
     const modalButtonsStyle = {
         display: 'flex',
-        gap: '10px',
-        justifyContent: 'flex-end'
+        gap: '15px',
+        justifyContent: 'flex-end',
+        marginTop: '25px'
     };
 
     const actionButtonStyle = {
-        padding: '10px 20px',
+        padding: '12px 25px',
         border: 'none',
-        borderRadius: '8px',
+        borderRadius: '10px',
         cursor: 'pointer',
         fontSize: '16px',
-        fontWeight: 'bold'
+        fontWeight: 'bold',
+        transition: 'all 0.3s ease',
+        fontFamily: 'Arial, sans-serif',
+        textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
+        backdropFilter: 'blur(10px)'
     };
 
     const bottomButtonsStyle = {
         display: 'flex',
         justifyContent: 'center',
-        gap: '20px',
-        marginTop: '30px'
+        gap: '25px',
+        marginTop: '30px',
+        position: 'relative',
+        zIndex: 10
     };
 
     const bottomButtonStyle = {
-        padding: '12px 25px',
-        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+        padding: '15px 30px',
+        background: 'linear-gradient(135deg, rgba(100, 150, 255, 0.3) 0%, rgba(74, 125, 255, 0.3) 100%)',
         color: 'white',
-        border: '2px solid rgba(255, 255, 255, 0.3)',
-        borderRadius: '8px',
+        border: '3px solid rgba(100, 150, 255, 0.5)',
+        borderRadius: '15px',
         cursor: 'pointer',
-        fontSize: '16px',
+        fontSize: '18px',
         fontWeight: 'bold',
-        transition: 'all 0.3s ease'
+        transition: 'all 0.3s ease',
+        textShadow: '2px 2px 4px rgba(0,0,0,0.5)',
+        fontFamily: 'Arial, sans-serif',
+        backdropFilter: 'blur(10px)'
     };
 
     const errorStyle = {
         color: '#ff6b6b',
         textAlign: 'center',
-        marginBottom: '15px',
+        marginBottom: '20px',
         fontWeight: 'bold',
         backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        padding: '10px',
-        borderRadius: '8px'
+        padding: '15px',
+        borderRadius: '10px',
+        border: '2px solid #ff6b6b',
+        textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
+        position: 'relative',
+        zIndex: 10
     };
 
     return (
         <div style={containerStyle}>
+            {/* Фоновый узор */}
+            <div className="background-pattern"></div>
+
             {/* Заголовок */}
             <div style={headerStyle}>
                 <h1 style={{
-                    fontSize: '2.5rem',
-                    marginBottom: '10px',
-                    textShadow: '2px 2px 4px rgba(0,0,0,0.3)'
+                    fontSize: '4rem',
+                    marginBottom: '20px',
+                    textShadow: '4px 4px 8px rgba(0,0,0,0.6), 0 0 30px rgba(100, 150, 255, 0.6)',
+                    background: 'linear-gradient(45deg, #6496ff, #a8d8ff, #4ecdc4)',
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    fontFamily: 'Arial, sans-serif',
+                    fontWeight: 'bold',
+                    letterSpacing: '2px'
                 }}>
-                    🏠 Комнаты
+                    🏡 Волшебные Комнаты
                 </h1>
-                <p style={{ fontSize: '1.1rem', opacity: '0.9' }}>
-                    Присоединяйтесь к комнатам Тайного Санты
+                <p style={{
+                    fontSize: '1.5rem',
+                    color: '#a8d8ff',
+                    textShadow: '2px 2px 4px rgba(0,0,0,0.5)',
+                    margin: 0
+                }}>
+                    Создай комнату или присоединись к существующей для обмена подарками!
                 </p>
             </div>
 
@@ -316,15 +398,15 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
                     style={addButtonStyle}
                     onClick={openCreateRoomModal}
                     onMouseEnter={(e) => {
-                        e.target.style.transform = 'scale(1.05)';
-                        e.target.style.boxShadow = '0 4px 15px rgba(0,0,0,0.2)';
+                        e.target.style.transform = 'scale(1.1) translateY(-3px)';
+                        e.target.style.boxShadow = '0 12px 25px rgba(0,0,0,0.4)';
                     }}
                     onMouseLeave={(e) => {
-                        e.target.style.transform = 'scale(1)';
-                        e.target.style.boxShadow = 'none';
+                        e.target.style.transform = 'scale(1) translateY(0)';
+                        e.target.style.boxShadow = '0 8px 20px rgba(0,0,0,0.3)';
                     }}
                 >
-                    + Создать комнату
+                    🎄 Создать новую комнату
                 </button>
             </div>
 
@@ -334,45 +416,59 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
                     {error}
                 </div>
             )}
-
-            {/* Панель с комнатами */}
-            <div style={roomsPanelStyle}>
-                {loading ? (
-                    <div style={{ textAlign: 'center', padding: '50px' }}>
-                        <p>Загрузка комнат...</p>
-                    </div>
-                ) : rooms.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '50px' }}>
-                        <p>Вы пока не состоите в комнатах. Создайте новую комнату или присоединитесь по паролю!</p>
-                    </div>
-                ) : (
-                    rooms.map(room => (
-                        <RoomItem
-                            key={room.id_room}
-                            room={room}
-                            onSelect={openPasswordModal}
-                        />
-                    ))
-                )}
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+                {/* Панель с комнатами */}
+                <div style={roomsPanelStyle} className="custom-scrollbar">
+                    {loading ? (
+                        <div style={{ textAlign: 'center', padding: '50px' }}>
+                            <p style={{ color: '#a8d8ff', fontSize: '20px', textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
+                                🎄 Загрузка комнат...
+                            </p>
+                        </div>
+                    ) : rooms.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '50px' }}>
+                            <p style={{ color: '#a8d8ff', fontSize: '18px', textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
+                                🏠 Пока нет доступных комнат. Создайте первую комнату!
+                            </p>
+                        </div>
+                    ) : (
+                        rooms.map(room => (
+                            <RoomItem
+                                key={room.id_room}
+                                room={room}
+                                onSelect={openPasswordModal}
+                            />
+                        ))
+                    )}
+                </div>
             </div>
+
 
             {/* Модальное окно создания комнаты */}
             {showCreateRoomModal && (
                 <div style={modalOverlayStyle} onClick={closeCreateRoomModal}>
-                    <div style={modalContentStyle} onClick={(e) => e.stopPropagation()}>
-                        <h2 style={{ marginTop: 0, color: '#333', textAlign: 'center' }}>
-                            Создание комнаты
+                    <div style={modalContentStyle} onClick={(e) => e.stopPropagation()} className="custom-scrollbar">
+                        <h2 style={{
+                            marginTop: 0,
+                            color: '#a8d8ff',
+                            textAlign: 'center',
+                            borderBottom: '2px solid rgba(100, 150, 255, 0.5)',
+                            paddingBottom: '15px',
+                            fontSize: '28px',
+                            textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
+                        }}>
+                            🎄 Создание комнаты
                         </h2>
 
                         {error && (
-                            <div style={{...errorStyle, color: '#ff6b6b', marginBottom: '15px'}}>
+                            <div style={{...errorStyle, color: '#ff6b6b', marginBottom: '20px', borderColor: '#ff6b6b'}}>
                                 {error}
                             </div>
                         )}
 
                         <input
                             type="text"
-                            placeholder="Название комнаты"
+                            placeholder="Название комнаты..."
                             value={roomName}
                             onChange={(e) => {
                                 setRoomName(e.target.value);
@@ -383,7 +479,7 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
 
                         <input
                             type="text"
-                            placeholder="Пароль для входа в комнату"
+                            placeholder="Пароль для входа в комнату..."
                             value={roomPassword}
                             onChange={(e) => {
                                 setRoomPassword(e.target.value);
@@ -399,23 +495,43 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
 
                         <div style={modalButtonsStyle}>
                             <button
-                                style={{ ...actionButtonStyle, backgroundColor: '#6c757d', color: 'white' }}
+                                style={{
+                                    ...actionButtonStyle,
+                                    background: 'linear-gradient(135deg, #6c757d 0%, #495057 100%)',
+                                    color: 'white'
+                                }}
                                 onClick={closeCreateRoomModal}
                                 disabled={creating}
+                                onMouseEnter={(e) => {
+                                    if (!creating) {
+                                        e.target.style.transform = 'translateY(-2px)';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.transform = 'translateY(0)';
+                                }}
                             >
                                 Отмена
                             </button>
                             <button
                                 style={{
                                     ...actionButtonStyle,
-                                    backgroundColor: '#28a745',
+                                    background: 'linear-gradient(135deg, #28a745 0%, #1e7e34 100%)',
                                     color: 'white',
-                                    opacity: creating ? 0.6 : 1
+                                    opacity: (creating || !roomName.trim() || !roomPassword.trim()) ? 0.6 : 1
                                 }}
                                 onClick={handleCreateRoom}
                                 disabled={creating || !roomName.trim() || !roomPassword.trim()}
+                                onMouseEnter={(e) => {
+                                    if (!creating && roomName.trim() && roomPassword.trim()) {
+                                        e.target.style.transform = 'translateY(-2px)';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.transform = 'translateY(0)';
+                                }}
                             >
-                                {creating ? 'Создание...' : 'Создать'}
+                                {creating ? '🎄 Создание...' : '✨ Создать комнату'}
                             </button>
                         </div>
                     </div>
@@ -425,23 +541,37 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
             {/* Модальное окно ввода пароля для входа в существующую комнату */}
             {showPasswordModal && (
                 <div style={modalOverlayStyle} onClick={closePasswordModal}>
-                    <div style={modalContentStyle} onClick={(e) => e.stopPropagation()}>
-                        <h2 style={{ marginTop: 0, color: '#333', textAlign: 'center' }}>
-                            Вход в комнату
+                    <div style={modalContentStyle} onClick={(e) => e.stopPropagation()} className="custom-scrollbar">
+                        <h2 style={{
+                            marginTop: 0,
+                            color: '#a8d8ff',
+                            textAlign: 'center',
+                            borderBottom: '2px solid rgba(100, 150, 255, 0.5)',
+                            paddingBottom: '15px',
+                            fontSize: '28px',
+                            textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
+                        }}>
+                            🚪 Вход в комнату
                         </h2>
-                        <p style={{ color: '#666', textAlign: 'center', marginBottom: '20px' }}>
+                        <p style={{
+                            color: '#a8d8ff',
+                            textAlign: 'center',
+                            marginBottom: '20px',
+                            fontSize: '20px',
+                            textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+                        }}>
                             {selectedRoom?.name_room}
                         </p>
 
                         {error && (
-                            <div style={{...errorStyle, color: '#ff6b6b', marginBottom: '15px'}}>
+                            <div style={{...errorStyle, color: '#ff6b6b', marginBottom: '20px', borderColor: '#ff6b6b'}}>
                                 {error}
                             </div>
                         )}
 
                         <input
                             type="text"
-                            placeholder="Пароль комнаты"
+                            placeholder="Пароль комнаты..."
                             value={password}
                             onChange={(e) => {
                                 setPassword(e.target.value);
@@ -457,23 +587,43 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
 
                         <div style={modalButtonsStyle}>
                             <button
-                                style={{ ...actionButtonStyle, backgroundColor: '#6c757d', color: 'white' }}
+                                style={{
+                                    ...actionButtonStyle,
+                                    background: 'linear-gradient(135deg, #6c757d 0%, #495057 100%)',
+                                    color: 'white'
+                                }}
                                 onClick={closePasswordModal}
                                 disabled={joining}
+                                onMouseEnter={(e) => {
+                                    if (!joining) {
+                                        e.target.style.transform = 'translateY(-2px)';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.transform = 'translateY(0)';
+                                }}
                             >
                                 Отмена
                             </button>
                             <button
                                 style={{
                                     ...actionButtonStyle,
-                                    backgroundColor: '#28a745',
+                                    background: 'linear-gradient(135deg, #28a745 0%, #1e7e34 100%)',
                                     color: 'white',
                                     opacity: joining ? 0.6 : 1
                                 }}
                                 onClick={handleJoinRoom}
                                 disabled={joining || !password.trim()}
+                                onMouseEnter={(e) => {
+                                    if (!joining && password.trim()) {
+                                        e.target.style.transform = 'translateY(-2px)';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.target.style.transform = 'translateY(0)';
+                                }}
                             >
-                                {joining ? 'Вход...' : 'Войти'}
+                                {joining ? '🎄 Вход...' : '✨ Войти в комнату'}
                             </button>
                         </div>
                     </div>
@@ -486,27 +636,31 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
                     style={bottomButtonStyle}
                     onClick={onBack}
                     onMouseEnter={(e) => {
-                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
-                        e.target.style.transform = 'translateY(-2px)';
+                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.4)';
+                        e.target.style.transform = 'translateY(-3px)';
+                        e.target.style.boxShadow = '0 10px 25px rgba(0,0,0,0.4)';
                     }}
                     onMouseLeave={(e) => {
                         e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
                         e.target.style.transform = 'translateY(0)';
+                        e.target.style.boxShadow = '0 5px 15px rgba(0,0,0,0.2)';
                     }}
                 >
-                    ↩️ Назад
+                    ↩️ Назад в меню
                 </button>
 
                 <button
                     style={bottomButtonStyle}
                     onClick={() => onNavigate('letters')}
                     onMouseEnter={(e) => {
-                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
-                        e.target.style.transform = 'translateY(-2px)';
+                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.4)';
+                        e.target.style.transform = 'translateY(-3px)';
+                        e.target.style.boxShadow = '0 10px 25px rgba(0,0,0,0.4)';
                     }}
                     onMouseLeave={(e) => {
                         e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
                         e.target.style.transform = 'translateY(0)';
+                        e.target.style.boxShadow = '0 5px 15px rgba(0,0,0,0.2)';
                     }}
                 >
                     ✉️ Мои письма
@@ -516,17 +670,155 @@ function RoomsPage({ currentUser, onNavigate, onBack }) {
                     style={bottomButtonStyle}
                     onClick={() => onNavigate('profile')}
                     onMouseEnter={(e) => {
-                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
-                        e.target.style.transform = 'translateY(-2px)';
+                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.4)';
+                        e.target.style.transform = 'translateY(-3px)';
+                        e.target.style.boxShadow = '0 10px 25px rgba(0,0,0,0.4)';
                     }}
                     onMouseLeave={(e) => {
                         e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
                         e.target.style.transform = 'translateY(0)';
+                        e.target.style.boxShadow = '0 5px 15px rgba(0,0,0,0.2)';
                     }}
                 >
                     👤 Мой профиль
                 </button>
             </div>
+
+            {/* Стили */}
+            <style>
+                {`
+                @import url('https://fonts.googleapis.com/css2?family=Mountains+of+Christmas:wght@400;700&display=swap');
+
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                }
+
+                html, body, #root {
+                    width: 100%;
+                    height: 100%;
+                    overflow: hidden;
+                }
+
+                /* Анимации */
+                @keyframes gradientShift {
+                    0% { background-position: 0% 50%; }
+                    50% { background-position: 100% 50%; }
+                    100% { background-position: 0% 50%; }
+                }
+
+                /* Фоновый узор */
+                .background-pattern {
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background-image: 
+                        radial-gradient(circle at 10% 20%, rgba(100, 150, 255, 0.1) 1%, transparent 5%),
+                        radial-gradient(circle at 90% 80%, rgba(100, 150, 255, 0.1) 1%, transparent 5%),
+                        radial-gradient(circle at 50% 50%, rgba(168, 216, 255, 0.08) 2%, transparent 6%),
+                        radial-gradient(circle at 30% 70%, rgba(100, 150, 255, 0.1) 1%, transparent 5%);
+                    background-size: 400px 400px, 500px 500px, 600px 600px, 350px 350px;
+                    animation: snowflakes 25s linear infinite;
+                    z-index: 0;
+                }
+
+                @keyframes snowflakes {
+                    0% { 
+                        background-position: 0px 0px, 0px 0px, 0px 0px, 0px 0px; 
+                    }
+                    100% { 
+                        background-position: 400px 400px, 500px 500px, 600px 600px, 350px 350px; 
+                    }
+                }
+
+                /* Стилизация скроллбара */
+                ::-webkit-scrollbar {
+                    width: 12px;
+                }
+
+                ::-webkit-scrollbar-track {
+                    background: rgba(255, 255, 255, 0.1);
+                    border-radius: 10px;
+                    margin: 5px;
+                }
+
+                ::-webkit-scrollbar-thumb {
+                    background: linear-gradient(135deg, #6496ff, #4a7dff);
+                    border-radius: 10px;
+                    border: 2px solid rgba(255, 255, 255, 0.3);
+                }
+
+                ::-webkit-scrollbar-thumb:hover {
+                    background: linear-gradient(135deg, #7aa3ff, #5b88ff);
+                }
+
+                /* Для Firefox */
+                * {
+                    scrollbar-width: thin;
+                    scrollbar-color: #6496ff rgba(255, 255, 255, 0.1);
+                }
+
+                /* Гарантируем, что скроллбар всегда виден для элементов с прокруткой */
+                .custom-scrollbar {
+                    scrollbar-width: thin;
+                    scrollbar-color: #6496ff rgba(255, 255, 255, 0.1);
+                }
+
+                .custom-scrollbar::-webkit-scrollbar {
+                    width: 12px;
+                }
+
+                .custom-scrollbar::-webkit-scrollbar-track {
+                    background: rgba(255, 255, 255, 0.1);
+                    border-radius: 10px;
+                    margin: 5px;
+                }
+
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                    background: linear-gradient(135deg, #6496ff, #4a7dff);
+                    border-radius: 10px;
+                    border: 2px solid rgba(255, 255, 255, 0.3);
+                }
+
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                    background: linear-gradient(135deg, #7aa3ff, #5b88ff);
+                }
+
+                /* Адаптивность */
+                @media (max-width: 1366px) {
+                    .containerStyle {
+                        padding: 30px 15px;
+                    }
+                    
+                    h1 {
+                        font-size: 3rem !important;
+                    }
+                    
+                    .roomsPanelStyle {
+                        max-height: 450px;
+                    }
+                }
+
+                @media (max-width: 1280px) {
+                    h1 {
+                        font-size: 2.5rem !important;
+                    }
+                    
+                    .addButtonStyle {
+                        padding: 12px 25px;
+                        font-size: 16px;
+                    }
+                    
+                    .bottomButtonStyle {
+                        padding: 12px 25px;
+                        font-size: 16px;
+                    }
+                }
+                `}
+            </style>
         </div>
     );
 }
@@ -536,14 +828,22 @@ const RoomItem = ({ room, onSelect }) => {
     const [isHovered, setIsHovered] = useState(false);
 
     const roomItemStyle = {
-        backgroundColor: isHovered ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.1)',
+        background: isHovered
+            ? 'linear-gradient(135deg, rgba(100, 150, 255, 0.2) 0%, rgba(74, 125, 255, 0.2) 100%)'
+            : 'rgba(255, 255, 255, 0.1)',
         padding: '20px',
-        borderRadius: '8px',
+        borderRadius: '15px',
         marginBottom: '15px',
         cursor: 'pointer',
         transition: 'all 0.3s ease',
-        transform: isHovered ? 'scale(1.02)' : 'scale(1)',
-        border: isHovered ? '2px solid rgba(255, 255, 255, 0.3)' : '2px solid transparent'
+        transform: isHovered ? 'translateY(-5px) scale(1.02)' : 'translateY(0) scale(1)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        position: 'relative',
+        border: isHovered ? '2px solid rgba(100, 150, 255, 0.5)' : '2px solid transparent',
+        boxShadow: isHovered ? '0 8px 25px rgba(0,0,0,0.4)' : '0 4px 15px rgba(0,0,0,0.2)',
+        backdropFilter: 'blur(10px)'
     };
 
     return (
@@ -553,20 +853,39 @@ const RoomItem = ({ room, onSelect }) => {
             onMouseLeave={() => setIsHovered(false)}
             onClick={() => onSelect(room)}
         >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                 <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: '0 0 8px 0', fontSize: '1.3rem' }}>{room.name_room}</h3>
-                    <p style={{ margin: '0 0 5px 0', opacity: 0.8 }}>
-                        Создатель: {room.creator_name}
+                    <h3 style={{
+                        margin: '0 0 10px 0',
+                        fontSize: '1.5rem',
+                        color: '#a8d8ff',
+                        textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
+                    }}>
+                        {room.name_room}
+                    </h3>
+                    <p style={{
+                        margin: '0 0 8px 0',
+                        opacity: 0.9,
+                        color: 'white',
+                        textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+                    }}>
+                        🎅 Создатель: {room.creator_name}
                     </p>
-                    <p style={{ margin: 0, opacity: 0.8 }}>
-                        Участников: {room.participants_count}
+                    <p style={{
+                        margin: 0,
+                        opacity: 0.9,
+                        color: 'white',
+                        textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+                    }}>
+                        👥 Участников: {room.participants_count}
                     </p>
                 </div>
                 <div style={{
-                    fontSize: '24px',
-                    transform: isHovered ? 'translateX(5px)' : 'translateX(0)',
-                    transition: 'transform 0.3s ease'
+                    fontSize: '28px',
+                    transform: isHovered ? 'translateX(5px) scale(1.2)' : 'translateX(0) scale(1)',
+                    transition: 'transform 0.3s ease',
+                    color: '#a8d8ff',
+                    textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
                 }}>
                     →
                 </div>

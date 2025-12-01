@@ -1,82 +1,218 @@
-// Login.js - КНОПКИ ОТДЕЛЬНО НАВЕРХУ
+// Register.js - КНОПКИ ОТДЕЛЬНО НАВЕРХУ
 import React, { useState } from 'react';
 
-function Login({ onLogin, onShowRegister, message }) {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
+function Register({ onRegister, onBackToLogin, message }) {
+    const [formData, setFormData] = useState({
+        name: '',
+        username: '',
+        mail: '',
+        password: '',
+        confirmPassword: ''
+    });
     const [isLoading, setIsLoading] = useState(false);
+    const [errors, setErrors] = useState({});
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({
+            ...prev,
+            [name]: value
+        }));
+        if (errors[name]) {
+            setErrors(prev => ({
+                ...prev,
+                [name]: ''
+            }));
+        }
+    };
+
+    const validateForm = () => {
+        const newErrors = {};
+
+        if (!formData.name.trim()) {
+            newErrors.name = 'Имя обязательно';
+        }
+
+        if (!formData.username.trim()) {
+            newErrors.username = 'Логин обязателен';
+        } else if (formData.username.length < 3) {
+            newErrors.username = 'Логин должен содержать минимум 3 символа';
+        }
+
+        if (!formData.mail.trim()) {
+            newErrors.mail = 'Почта обязательна';
+        } else if (!/\S+@\S+\.\S+/.test(formData.mail)) {
+            newErrors.mail = 'Некорректный формат почты';
+        }
+
+        if (!formData.password) {
+            newErrors.password = 'Пароль обязателен';
+        } else if (formData.password.length < 6) {
+            newErrors.password = 'Пароль должен содержать минимум 6 символов';
+        }
+
+        if (!formData.confirmPassword) {
+            newErrors.confirmPassword = 'Подтверждение пароля обязательно';
+        } else if (formData.password !== formData.confirmPassword) {
+            newErrors.confirmPassword = 'Пароли не совпадают';
+        }
+
+        setErrors(newErrors);
+        return Object.keys(newErrors).length === 0;
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+
+        if (!validateForm()) {
+            return;
+        }
+
         setIsLoading(true);
-        await onLogin(username, password);
-        setIsLoading(false);
+        setErrors({});
+
+        try {
+            await onRegister(formData);
+        } catch (error) {
+            console.error('Ошибка при регистрации:', error);
+            setErrors({ general: 'Ошибка при отправке формы' });
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (
-        <div className="login-container">
+        <div className="register-container">
             {/* Кнопки переключения отдельно сверху */}
             <div className="auth-tabs">
-                <button className="tab-button active candy-stripe">
-                    🎅 Вход
-                </button>
                 <button
                     className="tab-button outline"
-                    onClick={onShowRegister}
+                    onClick={onBackToLogin}
                     disabled={isLoading}
                 >
+                    🎅 Вход
+                </button>
+                <button className="tab-button active candy-stripe">
                     ✨ Регистрация
                 </button>
             </div>
 
             {/* Панель формы */}
-            <div className="form-panel candy-stripe">
+            <div className="form-panel candy-stripe extended">
                 <form onSubmit={handleSubmit} className="auth-form">
+                    {/* Имя */}
                     <div className="input-group">
                         <input
                             type="text"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            placeholder="Логин или почта"
-                            required
+                            name="name"
+                            value={formData.name}
+                            onChange={handleChange}
+                            placeholder="Отображаемое имя"
                             disabled={isLoading}
                             className="auth-input"
                         />
+                        {errors.name && (
+                            <div className="field-error">
+                                {errors.name}
+                            </div>
+                        )}
                     </div>
+
+                    {/* Логин */}
+                    <div className="input-group">
+                        <input
+                            type="text"
+                            name="username"
+                            value={formData.username}
+                            onChange={handleChange}
+                            placeholder="Логин (уникальный)"
+                            disabled={isLoading}
+                            className="auth-input"
+                        />
+                        {errors.username && (
+                            <div className="field-error">
+                                {errors.username}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Почта */}
+                    <div className="input-group">
+                        <input
+                            type="email"
+                            name="mail"
+                            value={formData.mail}
+                            onChange={handleChange}
+                            placeholder="Почта"
+                            disabled={isLoading}
+                            className="auth-input"
+                        />
+                        {errors.mail && (
+                            <div className="field-error">
+                                {errors.mail}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Пароль */}
                     <div className="input-group">
                         <input
                             type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            name="password"
+                            value={formData.password}
+                            onChange={handleChange}
                             placeholder="Пароль"
-                            required
                             disabled={isLoading}
                             className="auth-input"
                         />
+                        {errors.password && (
+                            <div className="field-error">
+                                {errors.password}
+                            </div>
+                        )}
                     </div>
+
+                    {/* Подтверждение пароля */}
+                    <div className="input-group">
+                        <input
+                            type="password"
+                            name="confirmPassword"
+                            value={formData.confirmPassword}
+                            onChange={handleChange}
+                            placeholder="Подтверждение пароля"
+                            disabled={isLoading}
+                            className="auth-input"
+                        />
+                        {errors.confirmPassword && (
+                            <div className="field-error">
+                                {errors.confirmPassword}
+                            </div>
+                        )}
+                    </div>
+
                     <button
                         type="submit"
                         disabled={isLoading}
                         className="submit-button"
                     >
-                        {isLoading ? 'Вход...' : 'Войти'}
+                        {isLoading ? 'Регистрация...' : 'Зарегистрироваться'}
                     </button>
                 </form>
             </div>
 
             {/* Новогодние украшения */}
+            <div className="decoration bell">🔔</div>
             <div className="decoration gift">🎁</div>
-            <div className="decoration tree">🎄</div>
 
-            {/* Сообщения об ошибках */}
-            {message && !message.includes('успешно') && (
+            {/* Общие ошибки */}
+            {(errors.general || message) && (
                 <div className="error-message">
-                    {message}
+                    {errors.general || message}
                 </div>
             )}
 
             <style jsx>{`
-                .login-container {
+                .register-container {
                     position: relative;
                     width: 400px;
                     display: flex;
@@ -155,10 +291,14 @@ function Login({ onLogin, onShowRegister, message }) {
                     z-index: 15;
                 }
 
+                .form-panel.extended {
+                    min-height: 450px;
+                }
+
                 .auth-form {
                     display: flex;
                     flex-direction: column;
-                    gap: 20px;
+                    gap: 15px;
                 }
 
                 .input-group {
@@ -167,7 +307,7 @@ function Login({ onLogin, onShowRegister, message }) {
 
                 .auth-input {
                     width: 100%;
-                    padding: 15px 20px;
+                    padding: 12px 20px;
                     font-size: 16px;
                     background: rgba(255, 255, 255, 0.95);
                     border: 2px solid #1a472a;
@@ -188,11 +328,20 @@ function Login({ onLogin, onShowRegister, message }) {
                     color: #666;
                 }
 
+                .field-error {
+                    color: #000000;
+                    font-size: 12px;
+                    margin-top: 5px;
+                    font-weight: bold;
+                    text-shadow: 0 1px 1px rgba(255, 255, 255, 0.8);
+                    font-family: 'Arial', sans-serif;
+                }
+
                 .submit-button {
                     padding: 15px;
                     font-size: 18px;
                     font-weight: bold;
-                    background: linear-gradient(45deg, #1a472a, #2da657);
+                    background: linear-gradient(45deg, #2da657, #2d5a3c);
                     color: white;
                     border: none;
                     border-radius: 8px;
@@ -201,6 +350,7 @@ function Login({ onLogin, onShowRegister, message }) {
                     box-shadow: 0 4px 15px rgba(26, 71, 42, 0.4);
                     text-transform: uppercase;
                     letter-spacing: 1px;
+                    margin-top: 10px;
                     font-family: 'Arial', sans-serif;
                 }
 
@@ -239,21 +389,21 @@ function Login({ onLogin, onShowRegister, message }) {
                 }
 
                 .snowflake {
-                    top: 15%;
-                    right: 15%;
-                    animation-delay: 1s;
+                    top: 10%;
+                    right: 10%;
+                    animation-delay: 1.5s;
+                }
+
+                .bell {
+                    bottom: 15%;
+                    left: 10%;
+                    animation-delay: 3s;
                 }
 
                 .gift {
-                    bottom: 20%;
-                    left: 15%;
-                    animation-delay: 2s;
-                }
-
-                .tree {
-                    bottom: 10%;
-                    right: 10%;
-                    animation-delay: 3s;
+                    bottom: 5%;
+                    right: 5%;
+                    animation-delay: 4.5s;
                 }
 
                 @keyframes float {
@@ -290,4 +440,4 @@ function Login({ onLogin, onShowRegister, message }) {
     );
 }
 
-export default Login;
+export default Register;
